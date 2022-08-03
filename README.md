@@ -8,4 +8,4 @@ Adds 2 settings to the [nomad](https://www.nomadproject.io/) job:
 
 "cloneto": the path to clone the repository to.
 
-
+"gitbranch": the branch to checkout.

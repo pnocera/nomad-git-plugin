@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/hashicorp/consul-template/signals"
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/nomad/drivers/shared/eventer"
@@ -88,10 +89,11 @@ var (
 	// taskConfigSpec is the hcl specification for the driver config section of
 	// a task within a job. It is returned in the TaskConfigSchema RPC
 	taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
-		"gitrepo": hclspec.NewAttr("gitrepo", "string", true),
-		"cloneto": hclspec.NewAttr("cloneto", "string", true),
-		"command": hclspec.NewAttr("command", "string", true),
-		"args":    hclspec.NewAttr("args", "list(string)", false),
+		"gitrepo":   hclspec.NewAttr("gitrepo", "string", true),
+		"gitbranch": hclspec.NewAttr("gitbranch", "string", true),
+		"cloneto":   hclspec.NewAttr("cloneto", "string", true),
+		"command":   hclspec.NewAttr("command", "string", true),
+		"args":      hclspec.NewAttr("args", "list(string)", false),
 	})
 
 	// capabilities is returned by the Capabilities RPC and indicates what
@@ -145,10 +147,11 @@ type Config struct {
 
 // TaskConfig is the driver configuration of a task within a job
 type TaskConfig struct {
-	Gitrepo string   `codec:"gitrepo"`
-	Cloneto string   `codec:"cloneto"`
-	Command string   `codec:"command"`
-	Args    []string `codec:"args"`
+	Gitrepo   string   `codec:"gitrepo"`
+	Gitbranch string   `codec:"gitbranch"`
+	Cloneto   string   `codec:"cloneto"`
+	Command   string   `codec:"command"`
+	Args      []string `codec:"args"`
 }
 
 // TaskState is the state which is encoded in the handle returned in
@@ -335,11 +338,24 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 
 	// Clone git repo
 	_, err = git.PlainClone(driverConfig.Cloneto, false, &git.CloneOptions{
-		URL:      driverConfig.Gitrepo,
-		Progress: os.Stdout,
+		URL:           driverConfig.Gitrepo,
+		ReferenceName: plumbing.NewBranchReferenceName(driverConfig.Gitbranch),
+		Progress:      os.Stdout,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to clone repo: %v", err)
+	}
+
+	if runtime.GOOS == "linux" {
+		// Set the user and group of the cloned repo to the same as the user
+		// running Nomad. This is necessary because git doesn't honor the
+		// user and group of the process that clones the repo.
+		if err := os.Chown(driverConfig.Cloneto, os.Getuid(), os.Getgid()); err != nil {
+			return nil, nil, fmt.Errorf("failed to chown cloned repo: %v", err)
+		}
+		if err := os.Chmod(driverConfig.Command, 0755); err != nil {
+			return nil, nil, fmt.Errorf("failed to chmod cloned command: %v", err)
+		}
 	}
 
 	execCmd := &executor.ExecCommand{
